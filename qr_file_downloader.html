@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QR File Downloader</title>
+  <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+  <style>
+    :root {
+      color-scheme: light dark;
+    }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f5f5f5;
+      color: #111;
+    }
+    .wrap {
+      max-width: 420px;
+      margin: 0 auto;
+      padding: 18px;
+      text-align: center;
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+    p {
+      margin-top: 0;
+      color: #444;
+    }
+    #reader {
+      width: 100%;
+      max-width: 360px;
+      margin: 16px auto;
+      border-radius: 14px;
+      overflow: hidden;
+      background: #fff;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+    }
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+      margin-top: 14px;
+      text-align: left;
+    }
+    #status {
+      font-weight: bold;
+      margin-bottom: 8px;
+      word-break: break-word;
+    }
+    #result {
+      word-break: break-word;
+      font-size: 14px;
+      color: #333;
+    }
+    button {
+      width: 100%;
+      border: none;
+      border-radius: 12px;
+      padding: 14px 16px;
+      font-size: 16px;
+      font-weight: bold;
+      margin-top: 10px;
+      cursor: pointer;
+      background: #111;
+      color: #fff;
+    }
+    button.secondary {
+      background: #e9e9e9;
+      color: #111;
+    }
+    .small {
+      font-size: 13px;
+      color: #666;
+      margin-top: 8px;
+      line-height: 1.4;
+    }
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #111;
+        color: #f5f5f5;
+      }
+      p, .small, #result {
+        color: #cfcfcf;
+      }
+      .card, #reader {
+        background: #1b1b1b;
+      }
+      button.secondary {
+        background: #2b2b2b;
+        color: #f5f5f5;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>QR File Downloader</h1>
+    <p>Use your phone camera to scan a QR code with a file link.</p>
+
+    <div id="reader"></div>
+
+    <div class="card">
+      <div id="status">Starting camera...</div>
+      <div id="result">Scan a QR code that contains a direct file URL.</div>
+      <button id="resumeBtn" class="secondary" type="button">Scan Again</button>
+      <button id="downloadBtn" type="button" disabled>Download Last Scanned File</button>
+      <div class="small">
+        Best results on HTTPS. The QR code should contain a direct file link, for example:
+        https://example.com/file.pdf
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const resultEl = document.getElementById("result");
+    const resumeBtn = document.getElementById("resumeBtn");
+    const downloadBtn = document.getElementById("downloadBtn");
+
+    const scanner = new Html5Qrcode("reader");
+    let lastScannedUrl = "";
+    let scanLocked = false;
+    let currentCameraId = null;
+
+    function isValidUrl(value) {
+      try {
+        const url = new URL(value);
+        return url.protocol === "http:" || url.protocol === "https:";
+      } catch {
+        return false;
+      }
+    }
+
+    function guessFileNameFromUrl(url) {
+      try {
+        const pathname = new URL(url).pathname;
+        const name = pathname.split("/").pop();
+        return name || "download";
+      } catch {
+        return "download";
+      }
+    }
+
+    function beep() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = ctx.createOscillator();
+        const gain = ctx.createGain();
+        oscillator.connect(gain);
+        gain.connect(ctx.destination);
+        oscillator.type = "sine";
+        oscillator.frequency.value = 880;
+        gain.gain.value = 0.05;
+        oscillator.start();
+        setTimeout(() => {
+          oscillator.stop();
+          ctx.close();
+        }, 160);
+      } catch {}
+    }
+
+    function vibrate() {
+      if (navigator.vibrate) navigator.vibrate(150);
+    }
+
+    function triggerDownload(fileUrl) {
+      lastScannedUrl = fileUrl;
+      downloadBtn.disabled = false;
+
+      const link = document.createElement("a");
+      link.href = fileUrl;
+      link.download = guessFileNameFromUrl(fileUrl);
+      link.rel = "noopener";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+
+    async function stopScanner() {
+      try {
+        if (await scanner.isScanning) {
+          await scanner.stop();
+        }
+      } catch {}
+    }
+
+    async function startScanner() {
+      scanLocked = false;
+      statusEl.textContent = "Starting camera...";
+      resultEl.textContent = "Scan a QR code that contains a direct file URL.";
+      downloadBtn.disabled = !lastScannedUrl;
+
+      try {
+        const devices = await Html5Qrcode.getCameras();
+        if (!devices || !devices.length) {
+          statusEl.textContent = "No camera found.";
+          return;
+        }
+
+        const rearCamera =
+          devices.find(d => /back|rear|environment/gi.test(d.label)) ||
+          devices[devices.length - 1];
+
+        currentCameraId = rearCamera.id;
+
+        await scanner.start(
+          currentCameraId,
+          {
+            fps: 10,
+            qrbox: { width: 250, height: 250 },
+            aspectRatio: 1.333334
+          },
+          async (decodedText) => {
+            if (scanLocked) return;
+            scanLocked = true;
+
+            resultEl.textContent = decodedText;
+
+            if (!isValidUrl(decodedText)) {
+              statusEl.textContent = "QR scanned, but it is not a valid file URL.";
+              scanLocked = false;
+              return;
+            }
+
+            statusEl.textContent = "QR scanned. Downloading file...";
+            beep();
+            vibrate();
+
+            await stopScanner();
+
+            try {
+              triggerDownload(decodedText);
+              statusEl.textContent = "Download started.";
+            } catch (err) {
+              statusEl.textContent = "Auto-download was blocked. Tap the button below.";
+            }
+          },
+          () => {}
+        );
+
+        statusEl.textContent = "Camera ready. Point it at a QR code.";
+      } catch (err) {
+        statusEl.textContent = "Camera error: " + (err && err.message ? err.message : err);
+      }
+    }
+
+    resumeBtn.addEventListener("click", async () => {
+      try {
+        await stopScanner();
+      } catch {}
+      startScanner();
+    });
+
+    downloadBtn.addEventListener("click", () => {
+      if (!lastScannedUrl) return;
+      triggerDownload(lastScannedUrl);
+    });
+
+    startScanner();
+  </script>
+</body>
+</html>
